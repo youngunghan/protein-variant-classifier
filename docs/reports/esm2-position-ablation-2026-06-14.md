@@ -1,6 +1,6 @@
 # ESM2 Position Feature Ablation - 2026-06-14
 
-> **Scope:** Run additional 650M ESM2 synthetic experiments to exercise the per-residue `position_col` feature path, the CLS fallback path, and frozen embedding cache reuse behavior.
+> **Scope:** Run additional 650M ESM2 experiments on the assignment-provided tiny CSV fixture to exercise the per-residue `position_col` feature path, the CLS fallback path, and frozen embedding cache reuse behavior.
 
 ## Result
 
@@ -8,7 +8,7 @@ Status: **passed as an implementation smoke, not a controlled ablation**
 
 Findings:
 
-- `position_col` per-residue features crossed the default 0.5 decision threshold quickly on this toy fixture.
+- `position_col` per-residue features crossed the default 0.5 decision threshold quickly on this assignment fixture.
 - The validation rows are duplicated from train; all validation metrics below are in-sample only.
 - CLS fallback had AUROC/AUPRC 1.0 on the two-row validation set, but its loss stayed near `ln(2)` at 20 epochs.
 - The observed CLS behavior is consistent with a harder/noisier feature path, but this fixture does not isolate CLS dilution from learning-rate, conditioning, seed, or data-design effects.
@@ -24,20 +24,20 @@ Committed fixture files:
 
 Run root for generated artifacts: `runs/esm2_650m_ablation_20260614`
 
-Synthetic records:
+Assignment fixture records:
 
 | Variant | Label | Position | Count in train | Count in val |
 |---|---:|---:|---:|---:|
 | `D26G` | 0 | 26 | 8 | 1 |
 | `L25K` | 1 | 25 | 4 | 1 |
 
-This fixture is intentionally tiny. It tests feature-path behavior, not biological generalization. The validation rows are byte-for-byte duplicates of the two mutation patterns present in train, so `val` should be read as an in-sample smoke split.
+This assignment-provided fixture is intentionally tiny. It tests feature-path behavior, not biological generalization. The validation rows are byte-for-byte duplicates of the two mutation patterns present in train, so `val` should be read as an in-sample smoke split.
 
 Important confounders:
 
 - `val` is a subset of train. Frozen ESM features for validation are therefore the same repeated feature vectors already seen during head training.
 - The label is perfectly collinear with mutation pattern, position, original residue, mutant residue, and sequence context (`D26G @ 26 -> 0`, `L25K @ 25 -> 1`).
-- The longer CLS run changes learning rate to `1e-3`, while the position runs remain at `1e-4`. It shows that CLS can eventually fit this fixture, not a controlled feature-only comparison.
+- The longer CLS run changes learning rate to `1e-3`, while the position runs remain at `1e-4`. It shows that CLS can eventually fit this assignment fixture, not a controlled feature-only comparison.
 - With `n_val=2` and one positive/one negative, AUROC 1.0 is a single ordered pair, not statistical evidence of generalization.
 
 ## Commands
@@ -122,8 +122,8 @@ python code/train_esm_classifier.py \
 
 Interpretation:
 
-- Position-aware features move this leaked, two-pattern fixture across the default 0.5 decision threshold much faster at `lr=1e-4`.
-- CLS fallback is not a failed ranker in this toy setup: AUROC/AUPRC are 1.0 because the two validation examples are correctly ordered.
+- Position-aware features move this leaked, two-pattern assignment fixture across the default 0.5 decision threshold much faster at `lr=1e-4`.
+- CLS fallback is not a failed ranker in this tiny setup: AUROC/AUPRC are 1.0 because the two validation examples are correctly ordered.
 - However, CLS validation loss remains near `0.70` through 20 epochs, so the ranking metrics are near-degenerate here. They should not be read as capacity or calibration evidence.
 - The `lr=1e-3` CLS run reaches validation accuracy 1.0 at epoch 27 and low loss by epoch 100, but it is not a controlled position-vs-CLS ablation because learning rate changed only for the CLS arm.
 - With only two duplicated validation examples, neither run supports a biological generalization claim or a controlled claim that position pooling is empirically superior to CLS on real GOF/LOF data.
@@ -160,10 +160,10 @@ The fix changes cache mode to compute `feature_dim` from `AutoConfig` first, the
 
 This ablation should be read as an implementation illustration, not a generalization proof:
 
-- It is consistent with the CLS-dilution concern: in this tiny fixture, the CLS fallback keeps the two examples ordered but needs many more head-training steps to cross the default threshold.
-- It does not isolate that mechanism. Learning rate, feature conditioning, seed, and the toy data design are all plausible explanations.
+- It is consistent with the CLS-dilution concern: in this tiny assignment fixture, the CLS fallback keeps the two examples ordered but needs many more head-training steps to cross the default threshold.
+- It does not isolate that mechanism. Learning rate, feature conditioning, seed, and the tiny fixture design are all plausible explanations.
 - It is consistent with the domain argument for per-residue variant features, but it does not prove that position features generalize better on real GOF/LOF data.
-- The stronger scientific rationale for position-aware features comes from the mutation-local nature of the task and from ESM variant-effect protocols that score mutated positions, not from this two-pattern synthetic ablation alone.
+- The stronger scientific rationale for position-aware features comes from the mutation-local nature of the task and from ESM variant-effect protocols that score mutated positions, not from this two-pattern assignment fixture alone.
 - Frozen feature caching is useful, and cache reuse should avoid loading the 650M model at all; the implementation now does that.
 
 This is still not a real GOF/LOF performance result. The fixture has two repeated mutation patterns and validation rows duplicated from train, so it proves feature-path behavior and implementation correctness, not generalization.

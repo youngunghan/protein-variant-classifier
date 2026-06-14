@@ -44,8 +44,8 @@ Run directory: `runs/esm2_650m_smoke_fresh_20260614`
 |---|---:|
 | Epochs | 1 |
 | `position_col` | not used |
-| Train examples | 12 synthetic |
-| Validation examples | 2 synthetic |
+| Train examples | 12 mock rows from `--use_mock_data` |
+| Validation examples | 2 mock rows from `--use_mock_data` |
 | Train loss | 0.6966265465 |
 | Validation loss | 0.7097883224 |
 | Validation accuracy | 0.5000 |
@@ -56,13 +56,13 @@ Run directory: `runs/esm2_650m_smoke_fresh_20260614`
 Interpretation:
 
 - This proves model download/cache, CUDA load, wt/mut forward, embedding cache, head training, metrics, and checkpoint writing.
-- It does **not** prove classifier training quality. Accuracy is only 0.5 at the default threshold after one epoch, and AUROC/AUPRC are inflated by a two-row synthetic validation set.
+- It does **not** prove classifier training quality. Accuracy is only 0.5 at the default threshold after one epoch, and AUROC/AUPRC are inflated by a two-row mock validation set.
 
 ### 2. Position-aware 20-epoch head-training smoke
 
 Run directory: `runs/esm2_650m_position_epochs20_20260614`
 
-This run used the same tiny synthetic mutation patterns but with explicit `position` values:
+This run used the same tiny assignment-provided mutation patterns but with explicit `position` values:
 
 - LOF: `D26G`, label `0`, position `26`
 - GOF: `L25K`, label `1`, position `25`
@@ -76,7 +76,7 @@ This run used the same tiny synthetic mutation patterns but with explicit `posit
 Interpretation:
 
 - The classifier head can learn from cached per-position ESM features.
-- The rapid loss collapse is expected because the synthetic train/validation sets contain repeated versions of only two mutation patterns.
+- The rapid loss collapse is expected because the assignment train/validation sets contain repeated versions of only two mutation patterns.
 - This is a functional training check, not a biological generalization check.
 
 ## Was One Epoch Enough?
@@ -104,12 +104,12 @@ The following paths were exercised successfully:
 - CUDA ESM forward over wild-type and mutant sequences.
 - Frozen feature cache generation.
 - Head-only classifier training.
-- Position-aware per-residue feature path in the 20-epoch synthetic run.
+- Position-aware per-residue feature path in the 20-epoch assignment-fixture run.
 - Checkpoint and metrics writing.
 
 Scientific training sufficiency: **not yet**.
 
-The current runs do not answer whether the model learns GOF/LOF biology. They use synthetic repeated examples and tiny validation sets. A valid training claim requires real labeled data, group-aware splits, and comparison to baselines such as simple substitution scores or ESM zero-shot log-likelihood ratios.
+The current runs do not answer whether the model learns GOF/LOF biology. They use repeated assignment examples and tiny validation sets. A valid training claim requires a larger disjoint labeled dataset, group-aware splits, and comparison to baselines such as simple substitution scores or ESM zero-shot log-likelihood ratios.
 
 ## Recommended Next Experiment
 
