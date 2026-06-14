@@ -14,3 +14,7 @@
 ## Explanation
 
 - [explanation/evaluation-validity.md](explanation/evaluation-validity.md) : split leakage, imbalance, truncation 관련 평가 해석 주의점.
+
+## Reports
+
+- [reports/esm2-650m-smoke-2026-06-14.md](reports/esm2-650m-smoke-2026-06-14.md) : 실제 ESM2 650M download/load/forward/cache/head-training smoke run 결과.
