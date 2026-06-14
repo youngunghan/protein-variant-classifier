@@ -21,7 +21,7 @@
    Meta's README lists ESM-1v as specialized for zero-shot variant effects and notes that ESM2 can also be used for variant prediction. For a supervised GOF/LOF label task, using ESM2 embeddings plus a supervised head is defensible, but the evaluation protocol must be separate from zero-shot DMS scoring claims.
 
 4. **Using token embeddings is aligned with the ESM design.**
-   Hugging Face's ESM docs describe ESM models as masked-language-model protein transformers and ESMFold as relying on token embeddings from the ESM2 stem. This repo's `last_hidden_state` feature extraction is therefore a normal use of the backbone. The pooler warning seen during load is not material because this repo does not use the pooler output.
+   Hugging Face's ESM docs describe ESM models as masked-language-model protein transformers and ESMFold as relying on token embeddings from the ESM2 stem. This repo's `last_hidden_state` feature extraction is therefore a normal use of the backbone. The smoke run's pooler warning was not material because this repo does not use the pooler output; the implementation now disables the unused pooler at load time.
 
 ## Current Repo Alignment
 

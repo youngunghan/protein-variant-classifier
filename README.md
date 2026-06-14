@@ -1,11 +1,11 @@
 # Protein Variant Classifier with ESM2
 
-ESM2 기반 protein variant **GOF/LOF** binary classifier입니다. 현재 구현은 wild-type sequence와 mutant sequence를 각각 ESM2로 임베딩한 뒤, `wt`, `mut`, `mut - wt` feature를 classifier head에 넣어 `0 = LOF`, `1 = GOF`를 예측합니다. `position` 컬럼을 제공하면 whole-sequence CLS 대신 변이 residue 위치의 per-position embedding을 사용합니다.
+ESM2 기반 protein variant **GOF/LOF** binary classifier입니다. 현재 구현은 wild-type sequence와 mutant sequence를 각각 ESM2로 임베딩한 뒤, `wt`, `mut`, `mut - wt` feature를 classifier head에 넣어 `0 = LOF`, `1 = GOF`를 예측합니다. `position` 컬럼을 제공하면 whole-sequence CLS 대신 단일 치환 residue 위치의 per-position embedding을 사용합니다.
 
 ## Key Features
 
 - **CSV 기반 학습**: `wt_seq`, `mut_seq`, `label` 컬럼을 가진 실제 CSV를 입력으로 사용합니다.
-- **Variant-Position Embedding**: 1-based `position` 컬럼이 있으면 해당 residue의 `E_mut - E_wt`를 feature로 사용합니다.
+- **Variant-Position Embedding**: 1-based `position` 컬럼이 있으면 single-substitution residue의 `E_mut - E_wt`를 feature로 사용합니다.
 - **Frozen Embedding Cache**: frozen ESM backbone이면 기본적으로 `output_dir/embedding_cache`에 feature를 precompute하고 classifier head만 학습합니다.
 - **Efficient Batching**: cache 생성 전 sequence pass에는 tokenization cache와 batch 내 최장 길이 기준 dynamic padding을 사용합니다.
 - **Class Imbalance Handling**: train label 분포에서 class weight를 자동 계산합니다.
@@ -36,7 +36,7 @@ MKTAYIAKQRQISFVKSHFSRQDILD,MKTAYIAKQRQISFVKSHFSRQDIKD,1
 
 권장 optional 컬럼:
 
-- `position`: 1-based 변이 residue 위치. CLI에서 `--position_col position`을 지정하면 ESM의 해당 residue embedding을 사용합니다. 없으면 CLS embedding으로 fallback합니다.
+- `position`: 1-based single-substitution residue 위치. CLI에서 `--position_col position`을 지정하면 ESM의 해당 residue embedding을 사용합니다. 없으면 CLS embedding으로 fallback합니다. Indel/복합 변이는 현재 position path에서 거부합니다.
 
 컬럼명이 다르면 CLI에서 `--wt_col`, `--mut_col`, `--label_col`, `--position_col`로 지정합니다.
 

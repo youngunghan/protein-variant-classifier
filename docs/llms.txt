@@ -19,4 +19,4 @@
 
 - [reports/esm2-650m-smoke-2026-06-14.md](reports/esm2-650m-smoke-2026-06-14.md) : 실제 ESM2 650M download/load/forward/cache/head-training smoke run 결과.
 - [reports/esm2-official-comparison-and-epoch-evaluation-2026-06-14.md](reports/esm2-official-comparison-and-epoch-evaluation-2026-06-14.md) : Meta/Hugging Face 공식 ESM2 자료와 현재 학습 경로 비교, epoch 판단.
-- [reports/esm2-position-ablation-2026-06-14.md](reports/esm2-position-ablation-2026-06-14.md) : `position_col` per-residue feature와 CLS fallback 비교, cache reuse 개선 검증.
+- [reports/esm2-position-ablation-2026-06-14.md](reports/esm2-position-ablation-2026-06-14.md) : `position_col`/CLS feature-path smoke, cache reuse 개선, 통제 ablation 한계.

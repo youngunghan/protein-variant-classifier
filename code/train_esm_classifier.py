@@ -22,7 +22,7 @@ from transformers import AutoConfig, AutoTokenizer, EsmModel
 
 MODEL_NAME = "facebook/esm2_t33_650M_UR50D"
 LABEL_MAPPING = {"LOF": 0, "GOF": 1}
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -33,27 +33,66 @@ class VariantRecord:
     position: int | None = None
 
 
+@dataclass(frozen=True)
+class ModelCacheInfo:
+    feature_dim: int
+    hidden_size: int
+    model_type: str | None
+    resolved_commit_hash: str | None
+
+
+def make_generator(seed: int | None) -> torch.Generator | None:
+    if seed is None:
+        return None
+    generator = torch.Generator()
+    generator.manual_seed(seed)
+    return generator
+
+
+def encode_sequence(tokenizer: Any, sequence: str, max_len: int) -> dict[str, torch.Tensor]:
+    encoded = tokenizer(
+        sequence,
+        padding=False,
+        truncation=True,
+        max_length=max_len,
+    )
+    return {
+        "input_ids": torch.tensor(encoded["input_ids"], dtype=torch.long),
+        "attention_mask": torch.tensor(encoded["attention_mask"], dtype=torch.long),
+    }
+
+
+def infer_residue_token_offset(tokenizer: Any, max_len: int) -> int:
+    try:
+        with_special = tokenizer("A", padding=False, truncation=True, max_length=max_len)["input_ids"]
+        without_special = tokenizer("A", add_special_tokens=False)["input_ids"]
+    except (KeyError, TypeError):
+        return 1
+
+    if not without_special:
+        return 1
+
+    for offset in range(len(with_special) - len(without_special) + 1):
+        if with_special[offset : offset + len(without_special)] == without_special:
+            return offset
+
+    raise ValueError("Could not locate residue tokens in tokenizer output; check tokenizer special-token policy")
+
+
+def residue_position_to_token_index(position: int, residue_token_offset: int) -> int:
+    return position + residue_token_offset - 1
+
+
 class VariantDataset(Dataset):
     def __init__(self, records: list[VariantRecord], tokenizer: Any, max_len: int):
         self.records = records
         self.tokenizer = tokenizer
         self.max_len = max_len
+        self.residue_token_offset = infer_residue_token_offset(tokenizer, max_len)
         self._cache: list[dict[str, torch.Tensor] | None] = [None] * len(records)
 
     def __len__(self) -> int:
         return len(self.records)
-
-    def _encode_sequence(self, sequence: str) -> dict[str, torch.Tensor]:
-        encoded = self.tokenizer(
-            sequence,
-            padding=False,
-            truncation=True,
-            max_length=self.max_len,
-        )
-        return {
-            "input_ids": torch.tensor(encoded["input_ids"], dtype=torch.long),
-            "attention_mask": torch.tensor(encoded["attention_mask"], dtype=torch.long),
-        }
 
     def _ensure_position_available(
         self,
@@ -64,7 +103,7 @@ class VariantDataset(Dataset):
         if record.position is None:
             return
 
-        token_index = record.position
+        token_index = residue_position_to_token_index(record.position, self.residue_token_offset)
         if token_index >= encoded["input_ids"].numel() or encoded["attention_mask"][token_index].item() == 0:
             raise ValueError(
                 f"position {record.position} for {sequence_name} sequence was truncated by max_len={self.max_len}; "
@@ -80,7 +119,7 @@ class VariantDataset(Dataset):
         if record.position is None:
             return
 
-        token_index = record.position
+        token_index = residue_position_to_token_index(record.position, self.residue_token_offset)
         if wt_encoded["input_ids"][token_index].item() == mut_encoded["input_ids"][token_index].item():
             raise ValueError(
                 f"position {record.position} does not identify a token difference between wild-type and mutant "
@@ -94,11 +133,16 @@ class VariantDataset(Dataset):
 
         record = self.records[idx]
 
-        wt_encoded = self._encode_sequence(record.wt_seq)
-        mut_encoded = self._encode_sequence(record.mut_seq)
+        wt_encoded = encode_sequence(self.tokenizer, record.wt_seq, self.max_len)
+        mut_encoded = encode_sequence(self.tokenizer, record.mut_seq, self.max_len)
         self._ensure_position_available(record, wt_encoded, "wild-type")
         self._ensure_position_available(record, mut_encoded, "mutant")
         self._ensure_position_matches_token_difference(record, wt_encoded, mut_encoded)
+        token_position = (
+            residue_position_to_token_index(record.position, self.residue_token_offset)
+            if record.position is not None
+            else -1
+        )
 
         item = {
             "wt_input_ids": wt_encoded["input_ids"],
@@ -106,7 +150,7 @@ class VariantDataset(Dataset):
             "mut_input_ids": mut_encoded["input_ids"],
             "mut_attention_mask": mut_encoded["attention_mask"],
             "label": torch.tensor(record.label, dtype=torch.long),
-            "position": torch.tensor(record.position if record.position is not None else -1, dtype=torch.long),
+            "position": torch.tensor(token_position, dtype=torch.long),
         }
         self._cache[idx] = item
         return item
@@ -217,9 +261,18 @@ class FeatureOnlyClassifier(nn.Module):
 
 
 class ESM2VariantClassifier(nn.Module):
-    def __init__(self, model_name: str = MODEL_NAME, freeze_backbone: bool = True):
+    def __init__(
+        self,
+        model_name: str = MODEL_NAME,
+        freeze_backbone: bool = True,
+        model_revision: str | None = None,
+    ):
         super().__init__()
-        self.esm = EsmModel.from_pretrained(model_name)
+        self.esm = EsmModel.from_pretrained(
+            model_name,
+            revision=model_revision,
+            add_pooling_layer=False,
+        )
         self.freeze_backbone = freeze_backbone
 
         if freeze_backbone:
@@ -303,6 +356,33 @@ def parse_position(value: str, line_number: int, position_col: str) -> int | Non
     return position
 
 
+def validate_substitution_position(
+    wt_seq: str,
+    mut_seq: str,
+    position: int | None,
+    line_number: int,
+    position_col: str,
+) -> None:
+    if position is None:
+        return
+    if len(wt_seq) != len(mut_seq):
+        raise ValueError(
+            f"Line {line_number}: {position_col} enables substitution-only position pooling, "
+            f"but sequence lengths differ (wt={len(wt_seq)}, mut={len(mut_seq)})"
+        )
+
+    mismatches = [
+        idx + 1
+        for idx, (wt_residue, mut_residue) in enumerate(zip(wt_seq, mut_seq))
+        if wt_residue != mut_residue
+    ]
+    if mismatches != [position]:
+        raise ValueError(
+            f"Line {line_number}: {position_col} enables substitution-only position pooling, "
+            f"but mismatching residue positions are {mismatches or 'none'}"
+        )
+
+
 def load_variant_csv(
     path: str,
     wt_col: str,
@@ -336,12 +416,17 @@ def load_variant_csv(
             if not mut_seq:
                 raise ValueError(f"Line {line_number}: {mut_col} must not be empty")
             label = parse_binary_label(row.get(label_col) or "", line_number)
-            position = parse_position(row.get(position_col) or "", line_number, position_col) if has_position_col else None
+            position = (
+                parse_position(row.get(position_col) or "", line_number, position_col)
+                if has_position_col
+                else None
+            )
             if position is not None and (position > len(wt_seq) or position > len(mut_seq)):
                 raise ValueError(
                     f"Line {line_number}: {position_col}={position} is outside the sequence length "
                     f"(wt={len(wt_seq)}, mut={len(mut_seq)})"
                 )
+            validate_substitution_position(wt_seq, mut_seq, position, line_number, position_col or "position")
             records.append(VariantRecord(wt_seq=wt_seq, mut_seq=mut_seq, label=label, position=position))
 
     if not records:
@@ -456,11 +541,6 @@ def build_dataloader(
     if pad_token_id is None:
         raise ValueError("Tokenizer must define pad_token_id for dynamic padding")
 
-    generator = None
-    if seed is not None:
-        generator = torch.Generator()
-        generator.manual_seed(seed)
-
     dataset = VariantDataset(records, tokenizer, max_len)
     return DataLoader(
         dataset,
@@ -469,7 +549,7 @@ def build_dataloader(
         num_workers=num_workers,
         collate_fn=VariantCollator(pad_token_id),
         worker_init_fn=seed_worker if num_workers > 0 else None,
-        generator=generator,
+        generator=make_generator(seed),
     )
 
 
@@ -480,18 +560,13 @@ def build_feature_dataloader(
     sampler: Any,
     seed: int | None = None,
 ) -> DataLoader:
-    generator = None
-    if seed is not None:
-        generator = torch.Generator()
-        generator.manual_seed(seed)
-
     return DataLoader(
         dataset,
         batch_size=batch_size,
         sampler=sampler,
         num_workers=num_workers,
         worker_init_fn=seed_worker if num_workers > 0 else None,
-        generator=generator,
+        generator=make_generator(seed),
     )
 
 
@@ -513,23 +588,52 @@ def feature_cache_metadata(
     records: list[VariantRecord],
     args: argparse.Namespace,
     split: str,
-    feature_dim: int,
+    model_info: ModelCacheInfo,
 ) -> dict[str, Any]:
     return {
         "version": CACHE_VERSION,
         "split": split,
         "model_name": args.model_name,
+        "model_revision": getattr(args, "model_revision", None),
+        "model": {
+            "name": args.model_name,
+            "revision": getattr(args, "model_revision", None),
+            "resolved_commit_hash": model_info.resolved_commit_hash,
+            "hidden_size": model_info.hidden_size,
+            "model_type": model_info.model_type,
+        },
+        "tokenizer": {
+            "name": args.model_name,
+            "revision": getattr(args, "model_revision", None),
+            "resolved_commit_hash": model_info.resolved_commit_hash,
+        },
         "max_len": args.max_len,
-        "feature_dim": feature_dim,
+        "truncation": {
+            "max_len": args.max_len,
+            "tokenizer_truncation": True,
+            "padding": "dynamic-batch",
+            "position_index": "1-based-residue-position-plus-tokenizer-prefix-offset",
+        },
+        "feature_dim": model_info.feature_dim,
         "num_records": len(records),
         "records_hash": hash_variant_records(records),
-        "pooling": "variant-position-when-present-else-cls",
+        "pooling": "substitution-position-when-present-else-cls",
     }
 
 
-def feature_dim_for_model(model_name: str) -> int:
-    config = AutoConfig.from_pretrained(model_name)
-    return int(config.hidden_size * 3)
+def model_cache_info(model_name: str, model_revision: str | None = None) -> ModelCacheInfo:
+    config = AutoConfig.from_pretrained(model_name, revision=model_revision)
+    hidden_size = int(config.hidden_size)
+    return ModelCacheInfo(
+        feature_dim=hidden_size * 3,
+        hidden_size=hidden_size,
+        model_type=getattr(config, "model_type", None),
+        resolved_commit_hash=getattr(config, "_commit_hash", None),
+    )
+
+
+def feature_dim_for_model(model_name: str, model_revision: str | None = None) -> int:
+    return model_cache_info(model_name, model_revision).feature_dim
 
 
 def metadata_matches(actual: dict[str, Any], expected: dict[str, Any]) -> bool:
@@ -537,7 +641,9 @@ def metadata_matches(actual: dict[str, Any], expected: dict[str, Any]) -> bool:
 
 
 def load_cached_feature_dataset(cache_path: Path, expected_metadata: dict[str, Any]) -> CachedFeatureDataset:
-    payload = torch.load(cache_path, map_location="cpu", weights_only=False)
+    payload = torch.load(cache_path, map_location="cpu", weights_only=True)
+    if not isinstance(payload, dict):
+        raise ValueError(f"Embedding cache payload must be a dict: {cache_path}")
     metadata = payload.get("metadata")
     if not isinstance(metadata, dict) or not metadata_matches(metadata, expected_metadata):
         raise ValueError(f"Embedding cache metadata does not match current run: {cache_path}")
@@ -813,12 +919,13 @@ def train(args: argparse.Namespace) -> None:
                 embedding_cache_dir.mkdir(parents=True, exist_ok=True)
 
         if use_embedding_cache:
-            feature_dim = feature_dim_for_model(args.model_name)
+            model_info = model_cache_info(args.model_name, args.model_revision)
+            feature_dim = model_info.feature_dim
             train_cache_path = embedding_cache_dir / "train.pt"
             val_cache_path = embedding_cache_dir / "val.pt" if val_records is not None else None
-            train_cache_metadata = feature_cache_metadata(train_records, args, "train", feature_dim)
+            train_cache_metadata = feature_cache_metadata(train_records, args, "train", model_info)
             val_cache_metadata = (
-                feature_cache_metadata(val_records, args, "val", feature_dim) if val_records is not None else None
+                feature_cache_metadata(val_records, args, "val", model_info) if val_records is not None else None
             )
 
             train_feature_dataset = None
@@ -832,8 +939,12 @@ def train(args: argparse.Namespace) -> None:
                     val_records is not None and val_feature_dataset is None
                 )
                 if needs_precompute:
-                    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-                    encoder_model = ESM2VariantClassifier(args.model_name, freeze_backbone=True).to(device)
+                    tokenizer = AutoTokenizer.from_pretrained(args.model_name, revision=args.model_revision)
+                    encoder_model = ESM2VariantClassifier(
+                        args.model_name,
+                        freeze_backbone=True,
+                        model_revision=args.model_revision,
+                    ).to(device)
                     if train_feature_dataset is None:
                         train_precompute_loader = build_dataloader(
                             train_records,
@@ -893,7 +1004,9 @@ def train(args: argparse.Namespace) -> None:
                     val_feature_dataset = load_cached_feature_dataset(val_cache_path, val_cache_metadata)
 
             train_sampler = (
-                DistributedSampler(train_feature_dataset) if is_distributed else RandomSampler(train_feature_dataset)
+                DistributedSampler(train_feature_dataset, seed=args.seed)
+                if is_distributed
+                else RandomSampler(train_feature_dataset, generator=make_generator(args.seed))
             )
             train_loader = build_feature_dataloader(
                 train_feature_dataset,
@@ -913,9 +1026,17 @@ def train(args: argparse.Namespace) -> None:
                 )
             model: nn.Module = FeatureOnlyClassifier(feature_dim).to(device)
         else:
-            tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-            model = ESM2VariantClassifier(args.model_name, freeze_backbone=args.freeze_backbone).to(device)
-            train_sampler = DistributedSampler(train_records) if is_distributed else RandomSampler(train_records)
+            tokenizer = AutoTokenizer.from_pretrained(args.model_name, revision=args.model_revision)
+            model = ESM2VariantClassifier(
+                args.model_name,
+                freeze_backbone=args.freeze_backbone,
+                model_revision=args.model_revision,
+            ).to(device)
+            train_sampler = (
+                DistributedSampler(train_records, seed=args.seed)
+                if is_distributed
+                else RandomSampler(train_records, generator=make_generator(args.seed))
+            )
             train_loader = build_dataloader(
                 train_records,
                 tokenizer,
@@ -1021,8 +1142,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--use_mock_data", action="store_true", help="Use tiny synthetic data for smoke tests")
 
-    parser.add_argument("--output_dir", type=str, default="runs/esm2_variant", help="Directory for checkpoints and metrics")
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="runs/esm2_variant",
+        help="Directory for checkpoints and metrics",
+    )
     parser.add_argument("--model_name", type=str, default=MODEL_NAME, help="Hugging Face ESM model name")
+    parser.add_argument("--model_revision", type=str, help="Optional Hugging Face model/tokenizer revision or commit")
     parser.add_argument("--freeze_backbone", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(
         "--embedding_cache",

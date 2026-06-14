@@ -14,7 +14,7 @@ pip install -r requirements.txt
 
 ## 2. CSV 준비
 
-학습 CSV는 최소 세 컬럼을 가져야 합니다. 변이 위치를 알고 있으면 `position` 컬럼을 추가하는 것을 권장합니다.
+학습 CSV는 최소 세 컬럼을 가져야 합니다. 단일 amino-acid substitution 위치를 알고 있으면 `position` 컬럼을 추가하는 것을 권장합니다. Indel/복합 변이는 현재 position path가 아니라 별도 전처리나 CLS fallback으로 다룹니다.
 
 ```csv
 wt_seq,mut_seq,position,label

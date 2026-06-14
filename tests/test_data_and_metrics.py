@@ -71,6 +71,24 @@ class DataAndMetricsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "outside the sequence length"):
             train.load_variant_csv(path, "wt_seq", "mut_seq", "label", "position")
 
+    def test_load_variant_csv_rejects_indel_when_position_pooling_is_enabled(self) -> None:
+        path = self.write_csv(
+            "wt_seq,mut_seq,position,label\n"
+            "MKT,MKTT,3,0\n"
+        )
+
+        with self.assertRaisesRegex(ValueError, "substitution-only"):
+            train.load_variant_csv(path, "wt_seq", "mut_seq", "label", "position")
+
+    def test_load_variant_csv_rejects_position_that_is_not_the_substitution(self) -> None:
+        path = self.write_csv(
+            "wt_seq,mut_seq,position,label\n"
+            "MKT,MRT,1,0\n"
+        )
+
+        with self.assertRaisesRegex(ValueError, "mismatching residue positions"):
+            train.load_variant_csv(path, "wt_seq", "mut_seq", "label", "position")
+
     def test_load_variant_csv_rejects_missing_columns(self) -> None:
         path = self.write_csv("wt_seq,label\nMKT,1\n")
 
@@ -164,8 +182,9 @@ class DataAndMetricsTests(unittest.TestCase):
             train.VariantRecord("AAA", "AAT", 0, 3),
             train.VariantRecord("AAA", "AAC", 1, 3),
         ]
-        args = SimpleNamespace(model_name="esm-test", max_len=8)
-        metadata = train.feature_cache_metadata(records, args, "train", feature_dim=6)
+        args = SimpleNamespace(model_name="esm-test", model_revision=None, max_len=8)
+        model_info = train.ModelCacheInfo(feature_dim=6, hidden_size=2, model_type="esm", resolved_commit_hash="abc123")
+        metadata = train.feature_cache_metadata(records, args, "train", model_info)
         features = torch.arange(12, dtype=torch.float32).reshape(2, 6)
         labels = torch.tensor([0, 1])
         cache_path = Path(tempfile.mkdtemp()) / "train.pt"
@@ -180,8 +199,9 @@ class DataAndMetricsTests(unittest.TestCase):
 
     def test_feature_cache_rejects_metadata_mismatch(self) -> None:
         records = [train.VariantRecord("AAA", "AAT", 0, 3)]
-        args = SimpleNamespace(model_name="esm-test", max_len=8)
-        metadata = train.feature_cache_metadata(records, args, "train", feature_dim=3)
+        args = SimpleNamespace(model_name="esm-test", model_revision=None, max_len=8)
+        model_info = train.ModelCacheInfo(feature_dim=3, hidden_size=1, model_type="esm", resolved_commit_hash="abc123")
+        metadata = train.feature_cache_metadata(records, args, "train", model_info)
         cache_path = Path(tempfile.mkdtemp()) / "train.pt"
 
         train.save_feature_cache(cache_path, torch.ones(1, 3), torch.tensor([0]), metadata)
@@ -190,8 +210,34 @@ class DataAndMetricsTests(unittest.TestCase):
 
         self.assertIsNone(train.try_load_cached_feature_dataset(cache_path, stale_metadata))
 
+    def test_feature_cache_rejects_non_dict_payload(self) -> None:
+        records = [train.VariantRecord("AAA", "AAT", 0, 3)]
+        args = SimpleNamespace(model_name="esm-test", model_revision=None, max_len=8)
+        model_info = train.ModelCacheInfo(feature_dim=3, hidden_size=1, model_type="esm", resolved_commit_hash="abc123")
+        metadata = train.feature_cache_metadata(records, args, "train", model_info)
+        cache_path = Path(tempfile.mkdtemp()) / "train.pt"
+        torch.save(torch.ones(1, 3), cache_path)
+
+        self.assertIsNone(train.try_load_cached_feature_dataset(cache_path, metadata))
+
+    def test_feature_cache_metadata_tracks_model_revision_and_truncation(self) -> None:
+        records = [train.VariantRecord("AAA", "AAT", 0, 3)]
+        args = SimpleNamespace(model_name="esm-test", model_revision="rev1", max_len=8)
+        model_info = train.ModelCacheInfo(feature_dim=3, hidden_size=1, model_type="esm", resolved_commit_hash="abc123")
+
+        metadata = train.feature_cache_metadata(records, args, "train", model_info)
+
+        self.assertEqual(metadata["model"]["revision"], "rev1")
+        self.assertEqual(metadata["model"]["resolved_commit_hash"], "abc123")
+        self.assertEqual(metadata["tokenizer"]["resolved_commit_hash"], "abc123")
+        self.assertEqual(metadata["truncation"]["max_len"], 8)
+
     def test_feature_dim_for_model_uses_config_hidden_size(self) -> None:
-        with patch.object(train.AutoConfig, "from_pretrained", return_value=SimpleNamespace(hidden_size=128)):
+        with patch.object(
+            train.AutoConfig,
+            "from_pretrained",
+            return_value=SimpleNamespace(hidden_size=128, model_type="esm", _commit_hash="abc123"),
+        ):
             self.assertEqual(train.feature_dim_for_model("esm-test"), 384)
 
     def test_batch_outputs_and_labels_accepts_cached_features(self) -> None:
@@ -260,6 +306,11 @@ class DataAndMetricsTests(unittest.TestCase):
         ]
 
         self.assertTrue(analyze_scores.patient_hit_at_k(group, "SCORE_A", 1))
+
+    def test_patient_hit_at_k_rejects_non_positive_k(self) -> None:
+        group = [{"label": 1, "scores": {"SCORE_A": 1.0}}]
+
+        self.assertFalse(analyze_scores.patient_hit_at_k(group, "SCORE_A", 0))
 
 
 if __name__ == "__main__":

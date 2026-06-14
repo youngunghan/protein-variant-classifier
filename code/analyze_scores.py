@@ -72,7 +72,7 @@ def load_score_rows(
 
 
 def patient_hit_at_k(group: list[dict[str, Any]], score_col: str, k: int) -> bool:
-    if not group:
+    if not group or k <= 0:
         return False
     cutoff_index = min(k, len(group)) - 1
     cutoff_score = sorted((row["scores"][score_col] for row in group), reverse=True)[cutoff_index]

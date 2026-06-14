@@ -25,8 +25,9 @@
 | 옵션 | 기본값 | 설명 |
 |---|---|---|
 | `--model_name` | `facebook/esm2_t33_650M_UR50D` | Hugging Face ESM model |
+| `--model_revision` | 없음 | Hugging Face model/tokenizer revision 또는 commit. 지정하지 않으면 hub/cache의 기본 revision 사용 |
 | `--freeze_backbone` / `--no-freeze_backbone` | true | ESM backbone freeze 여부 |
-| `--embedding_cache` | `auto` | `auto`는 frozen backbone일 때 ESM feature를 precompute 후 재사용, `on`은 강제, `off`는 비활성화 |
+| `--embedding_cache` | `auto` | `auto`는 frozen backbone일 때 ESM feature를 precompute 후 재사용, `on`은 강제, `off`는 비활성화. `on`은 `--freeze_backbone`이 필요 |
 | `--embedding_cache_dir` | 없음 | cache 저장 디렉터리. 없으면 `output_dir/embedding_cache` 사용 |
 | `--class_weight` | `auto` | `auto`는 train label 분포에서 class weight 계산, `none`은 미사용 |
 | `--batch_size` | `8` | GPU당 batch size |
@@ -61,7 +62,7 @@
 |---|---|
 | validation label이 `0/1` 양쪽을 모두 포함 | accuracy, AUROC, AUPRC 계산 |
 | validation label이 한 클래스만 포함 | AUROC/AUPRC는 `skipped`, loss/accuracy만 출력 |
-| frozen backbone + embedding cache enabled | `train.pt`/`val.pt` feature cache를 metadata(model, max_len, records hash, pooling policy)와 함께 저장하고 classifier head만 학습 |
+| frozen backbone + embedding cache enabled | `train.pt`/`val.pt` feature cache를 metadata(model/tokenizer name, requested revision, resolved commit hash, max_len/truncation policy, records hash, pooling policy)와 함께 저장하고 classifier head만 학습 |
 | embedding cache metadata가 현재 실행과 일치 | ESM 650M backbone을 로드하지 않고 cached feature tensor만 읽어 head를 학습 |
 | score 분석에서 pathogenic variant가 없는 patient | Top-k ranking 분모에서 제외하고 제외 수 출력 |
 | score 분석에서 분모가 0 | Top-k metric을 `skipped`로 출력 |
