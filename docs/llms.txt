@@ -1,0 +1,16 @@
+# protein-variant-classifier docs
+
+> ESM2 기반 GOF/LOF protein variant classifier의 실행 경로, CSV 계약, CLI 설정, 평가 타당성 한계를 압축한 색인.
+
+## Tutorials
+
+- [tutorials/quickstart.md](tutorials/quickstart.md) : CSV 학습 1회 실행과 output 확인.
+
+## Reference
+
+- [reference/data-format.md](reference/data-format.md) : training CSV와 score CSV의 컬럼 계약.
+- [reference/configuration.md](reference/configuration.md) : 학습/분석 스크립트 CLI 옵션.
+
+## Explanation
+
+- [explanation/evaluation-validity.md](explanation/evaluation-validity.md) : split leakage, imbalance, truncation 관련 평가 해석 주의점.
