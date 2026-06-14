@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "code"))
@@ -155,6 +156,10 @@ class DataAndMetricsTests(unittest.TestCase):
         stale_metadata["max_len"] = 4
 
         self.assertIsNone(train.try_load_cached_feature_dataset(cache_path, stale_metadata))
+
+    def test_feature_dim_for_model_uses_config_hidden_size(self) -> None:
+        with patch.object(train.AutoConfig, "from_pretrained", return_value=SimpleNamespace(hidden_size=128)):
+            self.assertEqual(train.feature_dim_for_model("esm-test"), 384)
 
     def test_batch_outputs_and_labels_accepts_cached_features(self) -> None:
         model = train.FeatureOnlyClassifier(feature_dim=3)

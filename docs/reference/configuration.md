@@ -62,6 +62,7 @@
 | validation label이 `0/1` 양쪽을 모두 포함 | accuracy, AUROC, AUPRC 계산 |
 | validation label이 한 클래스만 포함 | AUROC/AUPRC는 `skipped`, loss/accuracy만 출력 |
 | frozen backbone + embedding cache enabled | `train.pt`/`val.pt` feature cache를 metadata(model, max_len, records hash, pooling policy)와 함께 저장하고 classifier head만 학습 |
+| embedding cache metadata가 현재 실행과 일치 | ESM 650M backbone을 로드하지 않고 cached feature tensor만 읽어 head를 학습 |
 | score 분석에서 pathogenic variant가 없는 patient | Top-k ranking 분모에서 제외하고 제외 수 출력 |
 | score 분석에서 분모가 0 | Top-k metric을 `skipped`로 출력 |
 | score 분석에서 동점 score 발생 | Hit@k는 k번째 cutoff score 이상에 pathogenic variant가 있으면 hit로 계산 |

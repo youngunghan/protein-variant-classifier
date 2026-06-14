@@ -18,7 +18,7 @@ import torch.nn as nn
 from metrics import binary_average_precision, binary_roc_auc, format_metric, has_both_binary_classes
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, Dataset, DistributedSampler, RandomSampler, SequentialSampler
-from transformers import AutoTokenizer, EsmModel
+from transformers import AutoConfig, AutoTokenizer, EsmModel
 
 MODEL_NAME = "facebook/esm2_t33_650M_UR50D"
 LABEL_MAPPING = {"LOF": 0, "GOF": 1}
@@ -510,6 +510,11 @@ def feature_cache_metadata(
     }
 
 
+def feature_dim_for_model(model_name: str) -> int:
+    config = AutoConfig.from_pretrained(model_name)
+    return int(config.hidden_size * 3)
+
+
 def metadata_matches(actual: dict[str, Any], expected: dict[str, Any]) -> bool:
     return all(actual.get(key) == value for key, value in expected.items())
 
@@ -792,8 +797,7 @@ def train(args: argparse.Namespace) -> None:
                 embedding_cache_dir.mkdir(parents=True, exist_ok=True)
 
         if use_embedding_cache:
-            encoder_model = ESM2VariantClassifier(args.model_name, freeze_backbone=True).to(device)
-            feature_dim = int(encoder_model.esm.config.hidden_size * 3)
+            feature_dim = feature_dim_for_model(args.model_name)
             train_cache_path = embedding_cache_dir / "train.pt"
             val_cache_path = embedding_cache_dir / "val.pt" if val_records is not None else None
             train_cache_metadata = feature_cache_metadata(train_records, args, "train", feature_dim)
@@ -804,39 +808,63 @@ def train(args: argparse.Namespace) -> None:
             train_feature_dataset = None
             val_feature_dataset = None
             if is_main_process(is_distributed):
-                train_precompute_loader = build_dataloader(
-                    train_records,
-                    tokenizer,
-                    args.max_len,
-                    args.batch_size,
-                    args.num_workers,
-                    SequentialSampler(train_records),
-                    args.seed,
-                )
-                train_feature_dataset = precompute_feature_cache(
-                    encoder_model,
-                    train_precompute_loader,
-                    device,
-                    train_cache_path,
-                    train_cache_metadata,
-                )
+                train_feature_dataset = try_load_cached_feature_dataset(train_cache_path, train_cache_metadata)
                 if val_records is not None and val_cache_path is not None and val_cache_metadata is not None:
-                    val_precompute_loader = build_dataloader(
-                        val_records,
-                        tokenizer,
-                        args.max_len,
-                        args.batch_size,
-                        args.num_workers,
-                        SequentialSampler(val_records),
-                        args.seed,
-                    )
-                    val_feature_dataset = precompute_feature_cache(
-                        encoder_model,
-                        val_precompute_loader,
-                        device,
-                        val_cache_path,
-                        val_cache_metadata,
-                    )
+                    val_feature_dataset = try_load_cached_feature_dataset(val_cache_path, val_cache_metadata)
+
+                needs_precompute = train_feature_dataset is None or (
+                    val_records is not None and val_feature_dataset is None
+                )
+                if needs_precompute:
+                    encoder_model = ESM2VariantClassifier(args.model_name, freeze_backbone=True).to(device)
+                    if train_feature_dataset is None:
+                        train_precompute_loader = build_dataloader(
+                            train_records,
+                            tokenizer,
+                            args.max_len,
+                            args.batch_size,
+                            args.num_workers,
+                            SequentialSampler(train_records),
+                            args.seed,
+                        )
+                        train_feature_dataset = precompute_feature_cache(
+                            encoder_model,
+                            train_precompute_loader,
+                            device,
+                            train_cache_path,
+                            train_cache_metadata,
+                        )
+                    else:
+                        print(f"Reusing embedding cache: {train_cache_path}")
+
+                    if val_records is not None and val_cache_path is not None and val_cache_metadata is not None:
+                        if val_feature_dataset is None:
+                            val_precompute_loader = build_dataloader(
+                                val_records,
+                                tokenizer,
+                                args.max_len,
+                                args.batch_size,
+                                args.num_workers,
+                                SequentialSampler(val_records),
+                                args.seed,
+                            )
+                            val_feature_dataset = precompute_feature_cache(
+                                encoder_model,
+                                val_precompute_loader,
+                                device,
+                                val_cache_path,
+                                val_cache_metadata,
+                            )
+                        else:
+                            print(f"Reusing embedding cache: {val_cache_path}")
+
+                    del encoder_model
+                    if device.type == "cuda":
+                        torch.cuda.empty_cache()
+                else:
+                    print(f"Reusing embedding cache: {train_cache_path}")
+                    if val_cache_path is not None:
+                        print(f"Reusing embedding cache: {val_cache_path}")
 
             if is_distributed:
                 dist.barrier()
@@ -846,10 +874,6 @@ def train(args: argparse.Namespace) -> None:
             if val_records is not None and val_cache_path is not None and val_cache_metadata is not None:
                 if val_feature_dataset is None:
                     val_feature_dataset = load_cached_feature_dataset(val_cache_path, val_cache_metadata)
-
-            del encoder_model
-            if device.type == "cuda":
-                torch.cuda.empty_cache()
 
             train_sampler = (
                 DistributedSampler(train_feature_dataset) if is_distributed else RandomSampler(train_feature_dataset)
