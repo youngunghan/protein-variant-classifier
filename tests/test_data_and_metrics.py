@@ -18,6 +18,20 @@ import train_esm_classifier as train
 from metrics import binary_average_precision, binary_roc_auc
 
 
+class FakeProteinTokenizer:
+    pad_token_id = 99
+
+    def __call__(self, sequence: str, padding: bool, truncation: bool, max_length: int) -> dict[str, list[int]]:
+        vocab = {char: idx for idx, char in enumerate("ACDEFGHIKLMNPQRSTVWY", start=3)}
+        input_ids = [0] + [vocab[char] for char in sequence] + [2]
+        if truncation:
+            input_ids = input_ids[:max_length]
+        return {
+            "input_ids": input_ids,
+            "attention_mask": [1] * len(input_ids),
+        }
+
+
 class DataAndMetricsTests(unittest.TestCase):
     def write_csv(self, content: str) -> str:
         handle = tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False, encoding="utf-8")
@@ -113,6 +127,25 @@ class DataAndMetricsTests(unittest.TestCase):
         self.assertEqual(collated["wt_input_ids"][0, 3].item(), 99)
         self.assertEqual(collated["wt_attention_mask"][0, 3].item(), 0)
         self.assertEqual(collated["position"].tolist(), [1, 2])
+
+    def test_variant_dataset_rejects_position_without_token_difference(self) -> None:
+        dataset = train.VariantDataset(
+            [train.VariantRecord("MKT", "MRT", 0, position=1)],
+            FakeProteinTokenizer(),
+            max_len=8,
+        )
+
+        with self.assertRaisesRegex(ValueError, "does not identify a token difference"):
+            dataset[0]
+
+    def test_variant_dataset_accepts_position_with_token_difference(self) -> None:
+        dataset = train.VariantDataset(
+            [train.VariantRecord("MKT", "MRT", 0, position=2)],
+            FakeProteinTokenizer(),
+            max_len=8,
+        )
+
+        self.assertEqual(dataset[0]["position"].item(), 2)
 
     def test_pool_variant_embeddings_uses_position_when_available(self) -> None:
         hidden = torch.tensor(

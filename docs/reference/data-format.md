@@ -25,7 +25,7 @@ MKTAYIAKQRQISFVKSHFSRQDILD,MKTAYIAKQRQISFVKSHFSRQDIKD,1
 
 컬럼명이 다르면 [configuration.md §1.1](configuration.md#11-데이터-입력) 옵션으로 매핑합니다.
 
-`position`은 1부터 시작하는 원본 protein sequence residue index입니다. 제공된 위치가 sequence 길이 밖이면 CSV 로딩에서 거부하고, `--max_len` truncation으로 해당 token이 잘리면 학습 중 명시적 에러를 냅니다. 위치 컬럼을 지정하지 않으면 모델은 CLS embedding으로 fallback합니다.
+`position`은 1부터 시작하는 원본 protein sequence residue index입니다. 제공된 위치가 sequence 길이 밖이면 CSV 로딩에서 거부하고, `--max_len` truncation으로 해당 token이 잘리면 학습 중 명시적 에러를 냅니다. tokenized wild-type과 mutant의 해당 위치 token이 같아도 에러를 냅니다. 이는 ESM2 tokenizer에서 BOS token이 index 0이고 residue 1이 token index 1이라는 가정을 명시적으로 검증하기 위한 cheap guard입니다. 위치 컬럼을 지정하지 않으면 모델은 CLS embedding으로 fallback합니다.
 
 ## 2. Label
 

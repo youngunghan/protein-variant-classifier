@@ -22,7 +22,7 @@ from transformers import AutoConfig, AutoTokenizer, EsmModel
 
 MODEL_NAME = "facebook/esm2_t33_650M_UR50D"
 LABEL_MAPPING = {"LOF": 0, "GOF": 1}
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -71,6 +71,22 @@ class VariantDataset(Dataset):
                 "increase --max_len or train on sequence windows around the variant"
             )
 
+    def _ensure_position_matches_token_difference(
+        self,
+        record: VariantRecord,
+        wt_encoded: dict[str, torch.Tensor],
+        mut_encoded: dict[str, torch.Tensor],
+    ) -> None:
+        if record.position is None:
+            return
+
+        token_index = record.position
+        if wt_encoded["input_ids"][token_index].item() == mut_encoded["input_ids"][token_index].item():
+            raise ValueError(
+                f"position {record.position} does not identify a token difference between wild-type and mutant "
+                "sequences; check that the CSV uses 1-based residue positions"
+            )
+
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         cached = self._cache[idx]
         if cached is not None:
@@ -82,6 +98,7 @@ class VariantDataset(Dataset):
         mut_encoded = self._encode_sequence(record.mut_seq)
         self._ensure_position_available(record, wt_encoded, "wild-type")
         self._ensure_position_available(record, mut_encoded, "mutant")
+        self._ensure_position_matches_token_difference(record, wt_encoded, mut_encoded)
 
         item = {
             "wt_input_ids": wt_encoded["input_ids"],
@@ -786,7 +803,6 @@ def train(args: argparse.Namespace) -> None:
             if val_records is not None:
                 print(f"Loaded {len(val_records)} validation variants.")
 
-        tokenizer = AutoTokenizer.from_pretrained(args.model_name)
         output_dir = Path(args.output_dir)
         use_embedding_cache = should_use_embedding_cache(args)
         embedding_cache_dir = resolve_embedding_cache_dir(args) if use_embedding_cache else None
@@ -816,6 +832,7 @@ def train(args: argparse.Namespace) -> None:
                     val_records is not None and val_feature_dataset is None
                 )
                 if needs_precompute:
+                    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
                     encoder_model = ESM2VariantClassifier(args.model_name, freeze_backbone=True).to(device)
                     if train_feature_dataset is None:
                         train_precompute_loader = build_dataloader(
@@ -896,6 +913,7 @@ def train(args: argparse.Namespace) -> None:
                 )
             model: nn.Module = FeatureOnlyClassifier(feature_dim).to(device)
         else:
+            tokenizer = AutoTokenizer.from_pretrained(args.model_name)
             model = ESM2VariantClassifier(args.model_name, freeze_backbone=args.freeze_backbone).to(device)
             train_sampler = DistributedSampler(train_records) if is_distributed else RandomSampler(train_records)
             train_loader = build_dataloader(
